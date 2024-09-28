@@ -11,18 +11,31 @@ namespace Worker
         {
             try
             {
+                Console.WriteLine("Iniciando el consumidor de Kafka...");
+
                 // Configuración del consumidor de Kafka
                 var config = new ConsumerConfig
                 {
-                    GroupId = "vote-group", 
+                    GroupId = "vote-group",
                     BootstrapServers = "54.161.135.240:9093",
-                    AutoOffsetReset = AutoOffsetReset.Earliest  // Para leer desde el principio si no hay offset almacenado
+                    AutoOffsetReset = AutoOffsetReset.Earliest // Leer desde el principio si no hay offset almacenado
                 };
 
                 using (var consumer = new ConsumerBuilder<Ignore, string>(config).Build())
                 {
-                    // Suscribirse al tópico donde se reciben los votos
-                    consumer.Subscribe("bigdata");
+                    Console.WriteLine("Intentando conectar con el servidor de Kafka...");
+
+                    try
+                    {
+                        // Suscribirse al tópico donde se reciben los mensajes
+                        consumer.Subscribe("bigdata");
+                        Console.WriteLine("Conexión establecida y suscrito al tópico 'bigdata'. Esperando mensajes...");
+                    }
+                    catch (SocketException e)
+                    {
+                        Console.Error.WriteLine($"Error al conectar al servidor Kafka: {e.Message}");
+                        return 1;
+                    }
 
                     // Bucle para consumir mensajes de Kafka
                     while (true)
@@ -32,20 +45,26 @@ namespace Worker
                             var consumeResult = consumer.Consume(CancellationToken.None);
                             if (consumeResult != null)
                             {
-                                // Aquí simplemente imprimimos "Recibido"
-                                Console.WriteLine("Recibido");
+                                // Imprimir detalles del mensaje recibido
+                                Console.WriteLine($"Recibido mensaje del topic '{consumeResult.Topic}'");
+                                Console.WriteLine($"Partition: {consumeResult.Partition}, Offset: {consumeResult.Offset}");
+                                Console.WriteLine($"Mensaje: {consumeResult.Message.Value}");
                             }
                         }
                         catch (ConsumeException e)
                         {
-                            Console.WriteLine($"Error occurred: {e.Error.Reason}");
+                            Console.WriteLine($"Error de consumo: {e.Error.Reason}");
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"Error inesperado: {ex.Message}");
                         }
                     }
                 }
             }
             catch (Exception ex)
             {
-                Console.Error.WriteLine(ex.ToString());
+                Console.Error.WriteLine($"Excepción general: {ex.Message}");
                 return 1;
             }
         }
