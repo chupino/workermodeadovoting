@@ -25,40 +25,83 @@ namespace Worker
                 {
                     Console.WriteLine("Intentando conectar con el servidor de Kafka...");
 
-                    try
-                    {
-                        // Suscribirse al tópico donde se reciben los mensajes
-                        consumer.Subscribe("bigdata");
-                        Console.WriteLine("Conexión establecida y suscrito al tópico 'bigdata'. Esperando mensajes...");
-                    }
-                    catch (SocketException e)
-                    {
-                        Console.Error.WriteLine($"Error al conectar al servidor Kafka: {e.Message}");
-                        return 1;
-                    }
-
-                    // Bucle para consumir mensajes de Kafka
-                    while (true)
+                    // Manejo para reintentar conexión a Kafka si hay fallos de red
+                    int intentos = 0;
+                    bool conectado = false;
+                    while (!conectado && intentos < 5)
                     {
                         try
                         {
-                            var consumeResult = consumer.Consume(CancellationToken.None);
-                            if (consumeResult != null)
+                            consumer.Subscribe("bigdata");
+                            Console.WriteLine("Conexión establecida y suscrito al tópico 'bigdata'. Esperando mensajes...");
+                            conectado = true;
+                        }
+                        catch (SocketException e)
+                        {
+                            intentos++;
+                            Console.Error.WriteLine($"Error al conectar al servidor Kafka (intento {intentos}): {e.Message}");
+                            if (intentos < 5)
                             {
-                                // Imprimir detalles del mensaje recibido
-                                Console.WriteLine($"Recibido mensaje del topic '{consumeResult.Topic}'");
-                                Console.WriteLine($"Partition: {consumeResult.Partition}, Offset: {consumeResult.Offset}");
-                                Console.WriteLine($"Mensaje: {consumeResult.Message.Value}");
+                                Console.WriteLine("Reintentando conexión en 5 segundos...");
+                                Thread.Sleep(5000); // Espera 5 segundos antes de reintentar
+                            }
+                            else
+                            {
+                                Console.Error.WriteLine("No se pudo conectar al servidor Kafka después de múltiples intentos.");
+                                return 1;
                             }
                         }
-                        catch (ConsumeException e)
+                    }
+
+                    // Manejo de cancelación para detener el bucle de consumo de mensajes
+                    var cts = new CancellationTokenSource();
+                    Console.CancelKeyPress += (_, e) =>
+                    {
+                        e.Cancel = true; // Prevenir cierre inmediato
+                        cts.Cancel(); // Solicitar cancelación limpia
+                    };
+
+                    // Bucle para consumir mensajes de Kafka
+                    try
+                    {
+                        while (!cts.Token.IsCancellationRequested)
                         {
-                            Console.WriteLine($"Error de consumo: {e.Error.Reason}");
+                            try
+                            {
+                                var consumeResult = consumer.Consume(cts.Token);
+
+                                if (consumeResult?.Message != null)
+                                {
+                                    // Imprimir detalles del mensaje recibido
+                                    Console.WriteLine($"Recibido mensaje del topic '{consumeResult.Topic}'");
+                                    Console.WriteLine($"Partition: {consumeResult.Partition}, Offset: {consumeResult.Offset}");
+                                    Console.WriteLine($"Mensaje: {consumeResult.Message.Value}");
+                                }
+                                else
+                                {
+                                    Console.WriteLine("Mensaje nulo o vacío recibido.");
+                                }
+                            }
+                            catch (ConsumeException e)
+                            {
+                                Console.WriteLine($"Error de consumo: {e.Error.Reason}");
+                            }
+                            catch (OperationCanceledException)
+                            {
+                                // Salida limpia cuando se cancela el token
+                                Console.WriteLine("Consumo cancelado. Saliendo...");
+                                break;
+                            }
+                            catch (Exception ex)
+                            {
+                                Console.WriteLine($"Error inesperado: {ex.Message}");
+                            }
                         }
-                        catch (Exception ex)
-                        {
-                            Console.WriteLine($"Error inesperado: {ex.Message}");
-                        }
+                    }
+                    finally
+                    {
+                        consumer.Close(); // Cerrar correctamente el consumidor antes de salir
+                        Console.WriteLine("Consumidor cerrado.");
                     }
                 }
             }
@@ -67,6 +110,8 @@ namespace Worker
                 Console.Error.WriteLine($"Excepción general: {ex.Message}");
                 return 1;
             }
+
+            return 0; // Salida exitosa
         }
     }
 }
